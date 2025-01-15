@@ -234,14 +234,7 @@ class Tracer:
     def __init__(self, output=None, watch=(), watch_explode=(), depth=1,
                  prefix='', overwrite=False, thread_info=False, custom_repr=(),
                  max_variable_length=100, normalize=False, relative_time=False,
-                 color=True, observe_file_path = None, start_line = None, end_line = None):
-        
-        self.observe_file_path = observe_file_path
-        self.start_line = start_line
-        self.end_line = end_line
-        if self.observe_file_path:
-            assert self.start_line is not None and self.end_line is not None and self.start_line < self.end_line
-        
+                 color=True):
         self._write = get_write_function(output, overwrite)
 
         self.watch = [
@@ -318,8 +311,7 @@ class Tracer:
         return cls
 
     def _wrap_function(self, function):
-        if not self.observe_file_path:
-            self.target_codes.add(function.__code__)
+        self.target_codes.add(function.__code__)
 
         @functools.wraps(function)
         def simple_wrapper(*args, **kwargs):
@@ -361,15 +353,13 @@ class Tracer:
         calling_frame = inspect.currentframe().f_back
         if not self._is_internal_frame(calling_frame):
             calling_frame.f_trace = self.trace
-            if not self.observe_file_path:
-                self.target_frames.add(calling_frame) # axel: modify target_frames
+            self.target_frames.add(calling_frame)
 
         stack = self.thread_local.__dict__.setdefault(
             'original_trace_functions', []
         )
         stack.append(sys.gettrace())
-        if not self.observe_file_path:
-            self.start_times[calling_frame] = datetime_module.datetime.now()
+        self.start_times[calling_frame] = datetime_module.datetime.now()
         sys.settrace(self.trace)
 
     def __exit__(self, exc_type, exc_value, exc_traceback):
@@ -377,29 +367,28 @@ class Tracer:
             return
         stack = self.thread_local.original_trace_functions
         sys.settrace(stack.pop())
-        if not self.observe_file_path:
-            calling_frame = inspect.currentframe().f_back
-            self.target_frames.discard(calling_frame) #axel: modify target_frames
-            self.frame_to_local_reprs.pop(calling_frame, None)
+        calling_frame = inspect.currentframe().f_back
+        self.target_frames.discard(calling_frame)
+        self.frame_to_local_reprs.pop(calling_frame, None)
 
-            ### Writing elapsed time: #############################################
-            #                                                                     #
-            _FOREGROUND_YELLOW = self._FOREGROUND_YELLOW
-            _STYLE_DIM = self._STYLE_DIM
-            _STYLE_NORMAL = self._STYLE_NORMAL
-            _STYLE_RESET_ALL = self._STYLE_RESET_ALL
+        ### Writing elapsed time: #############################################
+        #                                                                     #
+        _FOREGROUND_YELLOW = self._FOREGROUND_YELLOW
+        _STYLE_DIM = self._STYLE_DIM
+        _STYLE_NORMAL = self._STYLE_NORMAL
+        _STYLE_RESET_ALL = self._STYLE_RESET_ALL
 
-            start_time = self.start_times.pop(calling_frame)
-            duration = datetime_module.datetime.now() - start_time
-            elapsed_time_string = pycompat.timedelta_format(duration)
-            indent = ' ' * 4 * (thread_global.depth + 1)
-            self.write(
-                '{indent}{_FOREGROUND_YELLOW}{_STYLE_DIM}'
-                'Elapsed time: {_STYLE_NORMAL}{elapsed_time_string}'
-                '{_STYLE_RESET_ALL}'.format(**locals())
-            )
-                                                                                #
-            ## Finished writing elapsed time. ####################################
+        start_time = self.start_times.pop(calling_frame)
+        duration = datetime_module.datetime.now() - start_time
+        elapsed_time_string = pycompat.timedelta_format(duration)
+        indent = ' ' * 4 * (thread_global.depth + 1)
+        self.write(
+            '{indent}{_FOREGROUND_YELLOW}{_STYLE_DIM}'
+            'Elapsed time: {_STYLE_NORMAL}{elapsed_time_string}'
+            '{_STYLE_RESET_ALL}'.format(**locals())
+        )
+        #                                                                     #
+        ### Finished writing elapsed time. ####################################
 
     def _is_internal_frame(self, frame):
         return frame.f_code.co_filename == Tracer.__enter__.__code__.co_filename
@@ -411,39 +400,7 @@ class Tracer:
         return thread_info.ljust(self.thread_info_padding)
 
     def trace(self, frame, event, arg):
-        if self.observe_file_path:
-            if len(self.target_frames) == 0:
-                frame_path = frame.f_code.co_filename
-                if frame_path == self.observe_file_path and self.start_line <= frame.f_lineno <= self.end_line:
-                    if frame not in self.target_frames:
-                        self.target_frames.add(frame)
-                        self.start_times[frame] = datetime_module.datetime.now()
-                        thread_global.depth = 0
-                else:
-                    return self.trace
-                
-        if self.observe_file_path:
-            if frame in self.target_frames and frame.f_lineno > self.end_line:
-                self.target_frames.discard(frame)
-                
-                self.frame_to_local_reprs.pop(frame, None)
-                ### Writing elapsed time: #############################################
-                #                                                                     #
-                _FOREGROUND_YELLOW = self._FOREGROUND_YELLOW
-                _STYLE_DIM = self._STYLE_DIM
-                _STYLE_NORMAL = self._STYLE_NORMAL
-                _STYLE_RESET_ALL = self._STYLE_RESET_ALL
 
-                start_time = self.start_times.pop(frame, None)
-                duration = datetime_module.datetime.now() - start_time
-                elapsed_time_string = pycompat.timedelta_format(duration)
-                indent = ' ' * 4 * (thread_global.depth)
-                self.write(
-                    '{indent}{_FOREGROUND_YELLOW}{_STYLE_DIM}'
-                    'Elapsed time: {_STYLE_NORMAL}{elapsed_time_string}'
-                    '{_STYLE_RESET_ALL}'.format(**locals())
-                )
-                return self.trace
         ### Checking whether we should trace this line: #######################
         #                                                                     #
         # We should trace this line either if it's in the decorated function,
@@ -595,10 +552,9 @@ class Tracer:
                        u'{line_no:4}{_STYLE_RESET_ALL} {source_line}'.format(**locals()))
 
         if event == 'return':
-            if not self.observe_file_path or frame not in self.target_frames:
-                self.frame_to_local_reprs.pop(frame, None)
-                self.start_times.pop(frame, None)
-                thread_global.depth -= 1
+            self.frame_to_local_reprs.pop(frame, None)
+            self.start_times.pop(frame, None)
+            thread_global.depth -= 1
 
             if not ended_by_exception:
                 return_value_repr = utils.get_shortish_repr(arg,
@@ -610,28 +566,6 @@ class Tracer:
                            'Return value:.. {_STYLE_NORMAL}{return_value_repr}'
                            '{_STYLE_RESET_ALL}'.
                            format(**locals()))
-            
-            if self.observe_file_path:
-                if frame in self.target_frames and frame.f_lineno == self.end_line:
-                    self.target_frames.discard(frame)
-                    
-                    self.frame_to_local_reprs.pop(frame, None)
-                    ### Writing elapsed time: #############################################
-                    #                                                                     #
-                    _FOREGROUND_YELLOW = self._FOREGROUND_YELLOW
-                    _STYLE_DIM = self._STYLE_DIM
-                    _STYLE_NORMAL = self._STYLE_NORMAL
-                    _STYLE_RESET_ALL = self._STYLE_RESET_ALL
-
-                    start_time = self.start_times.pop(frame, None)
-                    duration = datetime_module.datetime.now() - start_time
-                    elapsed_time_string = pycompat.timedelta_format(duration)
-                    indent = ' ' * 4 * (thread_global.depth)
-                    self.write(
-                        '{indent}{_FOREGROUND_YELLOW}{_STYLE_DIM}'
-                        'Elapsed time: {_STYLE_NORMAL}{elapsed_time_string}'
-                        '{_STYLE_RESET_ALL}'.format(**locals())
-                    )
 
         if event == 'exception':
             exception = '\n'.join(traceback.format_exception_only(*arg[:2])).strip()
@@ -640,6 +574,5 @@ class Tracer:
             self.write('{indent}{_FOREGROUND_RED}Exception:..... '
                        '{_STYLE_BRIGHT}{exception}'
                        '{_STYLE_RESET_ALL}'.format(**locals()))
-            
 
         return self.trace
