@@ -9,17 +9,17 @@ def read_file(filename):
         return file.read()
 
 version = re.search("__version__ = '([0-9.]*)'",
-                    read_file('pysnooper/__init__.py')).group(1)
+                    read_file('dbgsnooper/__init__.py')).group(1)
 
 setuptools.setup(
-    name='PySnooper',
+    name='dbgsnooper',
     version=version,
-    author='Ram Rachum',
-    author_email='ram@rachum.com',
-    description="A poor man's debugger for Python.",
+    author='axel',
+    author_email='',
+    description="dbgsnooper for debugging agent",
     long_description=read_file('README.md'),
     long_description_content_type='text/markdown',
-    url='https://github.com/cool-RR/PySnooper',
+    url='https://github.com/Inbenglable/PySnooper.git',
     packages=setuptools.find_packages(exclude=['tests*']),
     install_requires=read_file('requirements.in'),
     extras_require={

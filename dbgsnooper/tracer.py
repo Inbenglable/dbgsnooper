@@ -234,13 +234,16 @@ class Tracer:
     def __init__(self, output=None, watch=(), watch_explode=(), depth=1,
                  prefix='', overwrite=False, thread_info=False, custom_repr=(),
                  max_variable_length=100, normalize=False, relative_time=False,
-                 color=True, observe_file_path = None, start_line = None, end_line = None):
+                 color=True, observed_file = None, start_line = None, end_line = None, loop = None):
         
-        self.observe_file_path = observe_file_path
+        self.loop = loop
+        self.observed_file = observed_file
         self.start_line = start_line
         self.end_line = end_line
-        if self.observe_file_path:
-            assert self.start_line is not None and self.end_line is not None and self.start_line < self.end_line
+        self.frame_line_executed = {}
+        
+        if self.observed_file:
+            assert self.start_line and self.end_line and self.start_line < self.end_line
         
         self._write = get_write_function(output, overwrite)
 
@@ -318,7 +321,7 @@ class Tracer:
         return cls
 
     def _wrap_function(self, function):
-        if not self.observe_file_path:
+        if not self.observed_file:
             self.target_codes.add(function.__code__)
 
         @functools.wraps(function)
@@ -361,14 +364,14 @@ class Tracer:
         calling_frame = inspect.currentframe().f_back
         if not self._is_internal_frame(calling_frame):
             calling_frame.f_trace = self.trace
-            if not self.observe_file_path:
+            if not self.observed_file:
                 self.target_frames.add(calling_frame)
 
         stack = self.thread_local.__dict__.setdefault(
             'original_trace_functions', []
         )
         stack.append(sys.gettrace())
-        if not self.observe_file_path:
+        if not self.observed_file:
             self.start_times[calling_frame] = datetime_module.datetime.now()
         sys.settrace(self.trace)
 
@@ -377,7 +380,7 @@ class Tracer:
             return
         stack = self.thread_local.original_trace_functions
         sys.settrace(stack.pop())
-        if not self.observe_file_path:
+        if not self.observed_file:
             calling_frame = inspect.currentframe().f_back
             self.target_frames.discard(calling_frame)
             self.frame_to_local_reprs.pop(calling_frame, None)
@@ -411,22 +414,21 @@ class Tracer:
         return thread_info.ljust(self.thread_info_padding)
 
     def trace(self, frame, event, arg):
-        if self.observe_file_path:
+        if self.observed_file:
             if len(self.target_frames) == 0:
                 frame_path = frame.f_code.co_filename
-                if frame.f_code.co_filename == self.observe_file_path and self.start_line <= frame.f_lineno <= self.end_line:
+                if self.is_in_code_scope(frame):
                     if frame not in self.target_frames:
                         self.target_frames.add(frame)
                         self.start_times[frame] = datetime_module.datetime.now()
                         thread_global.depth = 0
                 else:
                     return self.trace
-            elif frame not in self.target_frames and frame.f_code.co_filename == self.observe_file_path and self.start_line <= frame.f_lineno <= self.end_line:  ## axel: every time we enter the target file, we need to push in stack for controling the depth
+            elif frame not in self.target_frames and self.is_in_code_scope(frame):  ## axel: every time we enter the target file, we need to push in stack for controling the depth
                 self.start_times[frame] = datetime_module.datetime.now()
                 self.target_frames.add(frame)
-                
-        if self.observe_file_path:
-            if frame in self.target_frames and (frame.f_lineno < self.start_line or frame.f_lineno > self.end_line):
+
+            if frame in self.target_frames and not self.is_in_code_scope(frame):
                 return self.trace
         ### Checking whether we should trace this line: #######################
         #                                                                     #
@@ -449,10 +451,20 @@ class Tracer:
                     if _frame_candidate is None:
                         return None
                     elif _frame_candidate.f_code in self.target_codes or _frame_candidate in self.target_frames:
+                        if self.loop:
+                            if self.has_executed_than_loop_times(_frame_candidate, loop_times = self.loop+1):
+                                return None
                         break
                 else:
                     return None
 
+        if self.loop:
+            if event != 'return' and event != 'exception':
+                if self.has_executed_than_loop_times(frame):
+                    self.record_frame_line_executed(frame)
+                    return None
+                else:
+                    self.record_frame_line_executed(frame)
         #                                                                     #
         ### Finished checking whether we should trace this line. ##############
 
@@ -579,7 +591,7 @@ class Tracer:
                        u'{line_no:4}{_STYLE_RESET_ALL} {source_line}'.format(**locals()))
 
         if event == 'return':
-            if not self.observe_file_path or frame not in self.target_frames:
+            if not self.observed_file or frame not in self.target_frames:
                 self.frame_to_local_reprs.pop(frame, None)
                 self.start_times.pop(frame, None)
                 thread_global.depth -= 1
@@ -595,7 +607,7 @@ class Tracer:
                            '{_STYLE_RESET_ALL}'.
                            format(**locals()))
             
-            if self.observe_file_path:
+            if self.observed_file:
                 if frame in self.target_frames:
                     self.manual_exit(frame)
 
@@ -606,7 +618,7 @@ class Tracer:
             self.write('{indent}{_FOREGROUND_RED}Exception:..... '
                        '{_STYLE_BRIGHT}{exception}'
                        '{_STYLE_RESET_ALL}'.format(**locals()))
-            if self.observe_file_path:
+            if self.observed_file:
                 if frame in self.target_frames:
                     self.manual_exit(frame)
 
@@ -632,3 +644,28 @@ class Tracer:
             'Elapsed time: {_STYLE_NORMAL}{elapsed_time_string}'
             '{_STYLE_RESET_ALL}'.format(**locals())
         )
+    
+    def is_in_code_scope(self, frame):
+        if self.observed_file:
+            if frame.f_code.co_filename == self.observed_file and self.start_line <= frame.f_lineno <= self.end_line:
+                return True
+        return False
+
+    def has_executed_than_loop_times(self, frame, loop_times = None):
+        has_loop_times = 0
+        if frame in self.frame_line_executed and frame.f_lineno in self.frame_line_executed[frame]:
+            has_loop_times = self.frame_line_executed[frame][frame.f_lineno]
+        # print(f'line: {frame.f_lineno}, loop_times: {has_loop_times}')
+        if not loop_times:
+            loop_times = self.loop
+        if frame in self.frame_line_executed:
+            if frame.f_lineno in self.frame_line_executed[frame] and has_loop_times >= loop_times:
+                return True
+        return False
+    
+    def record_frame_line_executed(self, frame):
+        if frame not in self.frame_line_executed:
+            self.frame_line_executed[frame] = {}
+        if frame.f_lineno not in self.frame_line_executed[frame]:
+            self.frame_line_executed[frame][frame.f_lineno] = 0
+        self.frame_line_executed[frame][frame.f_lineno] += 1
