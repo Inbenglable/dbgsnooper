@@ -1,5 +1,52 @@
-# PySnooper - Never use print for debugging again
+# dbgsnooper (based on Pysnooper)
 
+## Installation
+
+```bash
+git clone https://github.com/Inbenglable/dbgsnooper.git
+cd dbgsnooper
+python -m pip install -e .
+```
+
+This will install the package locally, and any changes you make to the code will take effect immediately without needing a reinstall.
+
+
+## About dbgsnooper
+
+`dbgsnooper` is a simple yet powerful debugger for Python. It is based on `PySnooper`, a lightweight debugging tool that provides a "set -x" style trace of your Python code. With `dbgsnooper`, you can quickly debug your code by automatically logging function calls and their return values, as well as the lines of code being executed—without needing to set breakpoints.
+
+This project is a modified version of the original `PySnooper` with added features. While it inherits all the functionality and usage patterns of `PySnooper`, it introduces the ability to specify and limit the scope of observation.
+
+### New Features Added to dbgsnooper
+
+1. **Observe a Specific Range of Code**  
+   You can now limit the trace to a specific range of lines in your code by using the `observed_file`, `start_line`, and `end_line` parameters. This is useful when you only want to focus on a particular part of your code:
+
+   ```python
+   @dbgsnooper.snoop(observed_file='/path/to/your/file.py', start_line=8, end_line=13, depth=2)
+   def my_function():
+       # function code
+   ```
+
+   In this example, the debugger will only trace the code between lines 8 and 13 of `file.py`, with a `depth` of 2.
+
+2. **Limit obsservation on Loop Iterations**  
+   When debugging loops, it’s often helpful to limit the number of iterations logged. The `loop` parameter lets you restrict the trace to a specified number of iterations:
+
+   ```python
+   @dbgsnooper.snoop(depth=2, loop=1)
+   def my_function():
+       for i in range(10):
+           # some code
+   ```
+
+   In this case, the debugger will trace only the first loop iteration, making it easier to debug without excessive output.
+
+---
+
+The following is the introduciton of PySnooper.
+
+## PySnooper
 **PySnooper** is a poor man's debugger. If you've used Bash, it's like `set -x` for Python, except it's fancier.
 
 Your story: You're trying to figure out why your Python code isn't doing what you think it should be doing. You'd love to use a full-fledged debugger with breakpoints and watches, but you can't be bothered to set one up right now.
