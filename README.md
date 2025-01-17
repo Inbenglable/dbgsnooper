@@ -34,7 +34,7 @@ This project is a modified version of the original `PySnooper` with added featur
    When debugging loops, it’s often helpful to limit the number of iterations logged. The `loop` parameter lets you restrict the trace to a specified number of iterations:
 
    ```python
-   @dbgsnooper.snoop(depth=2, loop=1)
+   @dbgsnooper.snoop(loop=1)
    def my_function():
        for i in range(10):
            # some code
