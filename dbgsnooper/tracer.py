@@ -416,12 +416,10 @@ class Tracer:
     def trace(self, frame, event, arg):
         if self.observed_file:
             if len(self.target_frames) == 0:
-                frame_path = frame.f_code.co_filename
                 if self.is_in_code_scope(frame):
-                    if frame not in self.target_frames:
-                        self.target_frames.add(frame)
-                        self.start_times[frame] = datetime_module.datetime.now()
-                        thread_global.depth = 0
+                    self.target_frames.add(frame)
+                    self.start_times[frame] = datetime_module.datetime.now()
+                    thread_global.depth = 0
                 else:
                     return self.trace
             elif frame not in self.target_frames and self.is_in_code_scope(frame):  ## axel: every time we enter the target file, we need to push in stack for controling the depth
@@ -655,7 +653,6 @@ class Tracer:
         has_loop_times = 0
         if frame in self.frame_line_executed and frame.f_lineno in self.frame_line_executed[frame]:
             has_loop_times = self.frame_line_executed[frame][frame.f_lineno]
-        # print(f'line: {frame.f_lineno}, loop_times: {has_loop_times}')
         if not loop_times:
             loop_times = self.loop
         if frame in self.frame_line_executed:
