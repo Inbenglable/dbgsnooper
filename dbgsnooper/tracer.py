@@ -644,8 +644,9 @@ class Tracer:
         )
     
     def is_in_code_scope(self, frame):
+        frame_file_name = os.path.abspath(frame.f_code.co_filename)
         if self.observed_file:
-            if frame.f_code.co_filename == self.observed_file and self.start_line <= frame.f_lineno <= self.end_line:
+            if frame_file_name == self.observed_file and self.start_line <= frame.f_lineno <= self.end_line:
                 return True
         return False
 
