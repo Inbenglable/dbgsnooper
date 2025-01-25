@@ -43,23 +43,23 @@ This project is a modified version of the original `PySnooper` with added featur
    In this case, the debugger will trace only the first loop iteration, making it easier to debug without excessive output.
 
 
-### 3. **Trace an Entire Python Script Without Modifying Its Code**  
+3. **Trace an Entire Python Script Without Modifying Its Code**  
 
-The `run_reproducer.py` script allows you to trace the execution of an entire Python program **without needing to manually add decorators**. This is especially useful when debugging a script from start to finish without worrying about which specific functions should be instrumented.  
+    The `run_reproducer.py` script allows you to trace the execution of an entire Python program **without needing to manually add decorators**. This is especially useful when debugging a script from start to finish without worrying about which specific functions should be instrumented.  
 
-#### **How It Works**  
+    #### **How It Works**  
 
-You provide the script to be executed along with the specific file and code sections you want to trace. The following parameters are available:
+    You provide the script to be executed along with the specific file and code sections you want to trace. The following parameters are available:
 
-- **`script_path`** – The path to the Python script you want to debug.  
-- **`observed_file`** – The file containing the code to be traced.  
-- **`start_line` & `end_line`** – The range of lines to observe.  
-- **`depth`** – The level of call stack depth to include in the trace.  
-- **`loop`** – Limits trace output for loop iterations.  
+    - **`script_path`** – The path to the Python script you want to debug.  
+    - **`observed_file`** – The file containing the code to be traced.  
+    - **`start_line` & `end_line`** – The range of lines to observe.  
+    - **`depth`** – The level of call stack depth to include in the trace.  
+    - **`loop`** – Limits trace output for loop iterations.  
 
-#### **Why Use This Approach?**  
-- No need to modify the original script.  
-- Ideal for debugging **third-party code** or **large projects** where adding decorators to individual functions is impractical.   
+    #### **Why Use This Approach?**  
+    - No need to modify the original script.  
+    - Ideal for debugging **third-party code** or **large projects** where adding decorators to individual functions is impractical.   
 
 
 ---
