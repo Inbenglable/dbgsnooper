@@ -423,10 +423,13 @@ class Tracer:
                 else:
                     return self.trace
             elif frame not in self.target_frames and self.is_in_code_scope(frame):  ## axel: every time we enter the target file, we need to push in stack for controling the depth
-                self.start_times[frame] = datetime_module.datetime.now()
+                if frame not in self.start_times:
+                    self.start_times[frame] = datetime_module.datetime.now() 
                 self.target_frames.add(frame)
 
             if frame in self.target_frames and not self.is_in_code_scope(frame):
+                if event == 'return' or event == 'exception':
+                    thread_global.depth -= 1
                 return self.trace
         ### Checking whether we should trace this line: #######################
         #                                                                     #
@@ -448,7 +451,7 @@ class Tracer:
                     _frame_candidate = _frame_candidate.f_back
                     if _frame_candidate is None:
                         return None
-                    elif _frame_candidate.f_code in self.target_codes or _frame_candidate in self.target_frames:
+                    elif _frame_candidate.f_code in self.target_codes or (_frame_candidate in self.target_frames and self.is_in_code_scope(_frame_candidate)):
                         if self.loop:
                             if self.has_executed_than_loop_times(_frame_candidate, loop_times = self.loop+1):
                                 return None
@@ -592,7 +595,7 @@ class Tracer:
             if not self.observed_file or frame not in self.target_frames:
                 self.frame_to_local_reprs.pop(frame, None)
                 self.start_times.pop(frame, None)
-                thread_global.depth -= 1
+            thread_global.depth -= 1
 
             if not ended_by_exception:
                 return_value_repr = utils.get_shortish_repr(arg,
@@ -610,6 +613,7 @@ class Tracer:
                     self.manual_exit(frame)
 
         if event == 'exception':
+            thread_global.depth -= 1
             exception = '\n'.join(traceback.format_exception_only(*arg[:2])).strip()
             if self.max_variable_length:
                 exception = utils.truncate(exception, self.max_variable_length)
