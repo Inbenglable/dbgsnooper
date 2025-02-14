@@ -17,6 +17,18 @@ This will install the package locally, and any changes you make to the code will
 
 This project is a modified version of the original `PySnooper` with added features. While it inherits all the functionality and usage patterns of `PySnooper`, it introduces the ability to specify and limit the scope of observation.
 
+### Note:
+Avoid running the Python file with `dbgsnooper` using a command with a relative path, such as:
+```
+python ./reproducer.py
+```
+Relative paths may cause discrepancies in the frame paths, leading to issues where `dbgsnooper` fails to trace certain frames properly.
+
+Instead, use the following command:
+```
+python reproducer.py
+```
+
 ### New Features Added to dbgsnooper
 
 1. **Observe a Specific Range of Code**  
@@ -52,8 +64,11 @@ This project is a modified version of the original `PySnooper` with added featur
     You provide the script to be executed along with the specific file and code sections you want to trace. The following parameters are available:
 
     - **`script_path`** – The path to the Python script you want to debug.  
-    - **`observed_file`** – The file containing the code to be traced.  
-    - **`start_line` & `end_line`** – The range of lines to observe.  
+    - **`file_scope_dict`** – The file line scope(s) that you want to trace. This parameter is a dictionary with the structure: 
+
+         ```{observed_file_path1 : (start_line, end_line), ...}```
+    
+        where `start_line` and `end_line` is the line range of each file line scope that you want to trace.  
     - **`depth`** – The level of call stack depth to include in the trace.  
     - **`loop`** – Limits trace output for loop iterations.  
 
