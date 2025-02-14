@@ -237,7 +237,7 @@ class Tracer:
                  color=True, observed_file = None, start_line = None, end_line = None, loop = None):
         
         self.loop = loop
-        self.observed_file = observed_file
+        self.observed_file = os.path.abspath(observed_file)
         self.start_line = start_line
         self.end_line = end_line
         self.frame_line_executed = {}
@@ -416,13 +416,17 @@ class Tracer:
     def trace(self, frame, event, arg):
         if self.observed_file:
             if len(self.target_frames) == 0:
-                if self.is_in_code_scope(frame):
-                    self.target_frames.add(frame)
-                    self.start_times[frame] = datetime_module.datetime.now()
-                    thread_global.depth = 0
+                frame_file_name = frame.f_code.co_filename
+                if frame_file_name == self.observed_file:
+                    if self.start_line <= frame.f_lineno <= self.end_line:
+                        self.target_frames.add(frame)
+                        self.start_times[frame] = datetime_module.datetime.now()
+                        thread_global.depth = 0
+                    else:
+                        return self.trace
                 else:
-                    return self.trace
-            elif frame not in self.target_frames and self.is_in_code_scope(frame):  ## axel: every time we enter the target file, we need to push in stack for controling the depth
+                    return None
+            elif frame not in self.target_frames and self.is_in_code_scope(frame):
                 if frame not in self.start_times:
                     self.start_times[frame] = datetime_module.datetime.now() 
                 self.target_frames.add(frame)
@@ -648,10 +652,15 @@ class Tracer:
         )
     
     def is_in_code_scope(self, frame):
-        frame_file_name = os.path.abspath(frame.f_code.co_filename)
+        frame_file_name = frame.f_code.co_filename
         if self.observed_file:
-            if frame_file_name == self.observed_file and self.start_line <= frame.f_lineno <= self.end_line:
-                return True
+            if self.start_line <= frame.f_lineno <= self.end_line:
+                if frame_file_name == self.observed_file:
+                    return True
+                else:
+                    frame_file_name = os.path.abspath(frame_file_name)
+                    if frame_file_name == self.observed_file:
+                        return True
         return False
 
     def has_executed_than_loop_times(self, frame, loop_times = None):
