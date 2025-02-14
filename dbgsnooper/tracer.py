@@ -234,16 +234,21 @@ class Tracer:
     def __init__(self, output=None, watch=(), watch_explode=(), depth=1,
                  prefix='', overwrite=False, thread_info=False, custom_repr=(),
                  max_variable_length=100, normalize=False, relative_time=False,
-                 color=True, observed_file = None, start_line = None, end_line = None, loop = None):
+                 color=True, file_scope_dict = None, loop = None):
         
         self.loop = loop
-        self.observed_file = os.path.abspath(observed_file)
-        self.start_line = start_line
-        self.end_line = end_line
+        self.file_scope_dict = {}
+        for file_path, line_scope in file_scope_dict.items():
+            self.file_scope_dict[os.path.abspath(file_path)] = line_scope
+        
         self.frame_line_executed = {}
         
-        if self.observed_file:
-            assert self.start_line and self.end_line and self.start_line < self.end_line
+        if self.file_scope_dict:
+            assert len(self.file_scope_dict) > 0
+            for file_path in self.file_scope_dict:
+                assert os.path.exists(file_path)
+                start_line, end_line = self.file_scope_dict[file_path]
+                assert start_line <= end_line
         
         self._write = get_write_function(output, overwrite)
 
@@ -321,7 +326,7 @@ class Tracer:
         return cls
 
     def _wrap_function(self, function):
-        if not self.observed_file:
+        if not self.file_scope_dict:
             self.target_codes.add(function.__code__)
 
         @functools.wraps(function)
@@ -364,14 +369,14 @@ class Tracer:
         calling_frame = inspect.currentframe().f_back
         if not self._is_internal_frame(calling_frame):
             calling_frame.f_trace = self.trace
-            if not self.observed_file:
+            if not self.file_scope_dict:
                 self.target_frames.add(calling_frame)
 
         stack = self.thread_local.__dict__.setdefault(
             'original_trace_functions', []
         )
         stack.append(sys.gettrace())
-        if not self.observed_file:
+        if not self.file_scope_dict:
             self.start_times[calling_frame] = datetime_module.datetime.now()
         sys.settrace(self.trace)
 
@@ -380,7 +385,7 @@ class Tracer:
             return
         stack = self.thread_local.original_trace_functions
         sys.settrace(stack.pop())
-        if not self.observed_file:
+        if not self.file_scope_dict:
             calling_frame = inspect.currentframe().f_back
             self.target_frames.discard(calling_frame)
             self.frame_to_local_reprs.pop(calling_frame, None)
@@ -414,11 +419,12 @@ class Tracer:
         return thread_info.ljust(self.thread_info_padding)
 
     def trace(self, frame, event, arg):
-        if self.observed_file:
+        if self.file_scope_dict:
             if len(self.target_frames) == 0:
                 frame_file_name = frame.f_code.co_filename
-                if frame_file_name == self.observed_file:
-                    if self.start_line <= frame.f_lineno <= self.end_line:
+                if frame_file_name in self.file_scope_dict:
+                    start_time, end_time = self.file_scope_dict[frame_file_name]
+                    if start_time <= frame.f_lineno <= end_time:
                         self.target_frames.add(frame)
                         self.start_times[frame] = datetime_module.datetime.now()
                         thread_global.depth = 0
@@ -596,7 +602,7 @@ class Tracer:
                        u'{line_no:4}{_STYLE_RESET_ALL} {source_line}'.format(**locals()))
 
         if event == 'return':
-            if not self.observed_file or frame not in self.target_frames:
+            if not self.file_scope_dict or frame not in self.target_frames:
                 self.frame_to_local_reprs.pop(frame, None)
                 self.start_times.pop(frame, None)
             thread_global.depth -= 1
@@ -612,7 +618,7 @@ class Tracer:
                            '{_STYLE_RESET_ALL}'.
                            format(**locals()))
             
-            if self.observed_file:
+            if self.file_scope_dict:
                 if frame in self.target_frames:
                     self.manual_exit(frame)
 
@@ -624,7 +630,7 @@ class Tracer:
             self.write('{indent}{_FOREGROUND_RED}Exception:..... '
                        '{_STYLE_BRIGHT}{exception}'
                        '{_STYLE_RESET_ALL}'.format(**locals()))
-            if self.observed_file:
+            if self.file_scope_dict:
                 if frame in self.target_frames:
                     self.manual_exit(frame)
 
@@ -653,13 +659,16 @@ class Tracer:
     
     def is_in_code_scope(self, frame):
         frame_file_name = frame.f_code.co_filename
-        if self.observed_file:
-            if self.start_line <= frame.f_lineno <= self.end_line:
-                if frame_file_name == self.observed_file:
+        if self.file_scope_dict:
+            if frame_file_name in self.file_scope_dict:
+                start_line, end_line = self.file_scope_dict[frame_file_name]
+                if start_line <= frame.f_lineno <= end_line:
                     return True
-                else:
-                    frame_file_name = os.path.abspath(frame_file_name)
-                    if frame_file_name == self.observed_file:
+            else:
+                frame_file_name = os.path.abspath(frame_file_name)
+                if frame_file_name in self.file_scope_dict:
+                    start_line, end_line = self.file_scope_dict[frame_file_name]
+                    if start_line <= frame.f_lineno <= end_line:
                         return True
         return False
 
