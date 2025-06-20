@@ -234,15 +234,11 @@ class Tracer:
     def __init__(self, output=None, watch=(), watch_explode=(), depth=1,
                  prefix='', overwrite=False, thread_info=False, custom_repr=(),
                  max_variable_length=100, normalize=False, relative_time=False,
-                 color=True, observed_file = None, start_line = None, end_line = None, loop = None, depth_expanded = True, call_graph_output_path = '/data/swe-fl/SRC/pysnooper_axel/trace_test/test.json'):
-        self.depth_expanded = depth_expanded if not call_graph_output_path else False
+                 color=True, observed_file = None, start_line = None, end_line = None, loop = None, depth_expanded = True, enable_call_graph = False):
+        self.depth_expanded = depth_expanded if not enable_call_graph else False
         self.is_in_expanded_status = False
         
-        self.call_graph_output_path = call_graph_output_path
-        if call_graph_output_path:
-            self.call_frames = {}
-            self.call_infos = []
-        
+        self.enable_call_graph = enable_call_graph
         
         self.loop = loop
         self.observed_file = os.path.abspath(observed_file) if observed_file else None
@@ -363,7 +359,7 @@ class Tracer:
             return simple_wrapper
 
     def write(self, s):
-        if not self.call_graph_output_path:
+        if not self.enable_call_graph:
             s = u'{self.prefix}{s}\n'.format(**locals())
             self._write(s)
 
@@ -471,7 +467,7 @@ class Tracer:
                             self.is_in_expanded_status = False
                     break
             else:
-                return self.trace
+                return None
 
 
         if self.loop:
@@ -551,33 +547,16 @@ class Tracer:
 
         newish_string = ('Starting var:.. ' if event == 'call' else
                                                             'New var:....... ')
-        
         if not self.is_in_expanded_status or event == 'call':
-            
-            input_para_string = ''
-            modify_var_string = ''
             for name, value_repr in local_reprs.items():
                 if name not in old_local_reprs:
-                    input_para_string += f'{name} = {value_repr},\t'
-                    
-
+                    self.write('{indent}{_FOREGROUND_GREEN}{_STYLE_DIM}'
+                            '{newish_string}{_STYLE_NORMAL}{name} = '
+                            '{value_repr}{_STYLE_RESET_ALL}'.format(**locals()))
                 elif old_local_reprs[name] != value_repr:
-                    modify_var_string += f'{name} = {value_repr}, '
-            
-            if input_para_string:
-                input_para_string = input_para_string.rstrip().strip(',')
-                if len(input_para_string) > 100:
-                    input_para_string = input_para_string[:94] + ' ......'
-                self.write('{indent}{_FOREGROUND_GREEN}{_STYLE_DIM}'
-                        '{newish_string}{_STYLE_NORMAL}{input_para_string}{_STYLE_RESET_ALL}'.format(**locals()))
-                
-            if modify_var_string:
-                modify_var_string = modify_var_string.rstrip().strip(',')
-                if len(modify_var_string) > 100:
-                    modify_var_string = modify_var_string[:94] + ' ......'
-                self.write('{indent}{_FOREGROUND_GREEN}{_STYLE_DIM}'
-                        'Modified var:.. {_STYLE_NORMAL}{modify_var_string}{_STYLE_RESET_ALL}'.format(**locals()))
-
+                    self.write('{indent}{_FOREGROUND_GREEN}{_STYLE_DIM}'
+                            'Modified var:.. {_STYLE_NORMAL}{name} = '
+                            '{value_repr}{_STYLE_RESET_ALL}'.format(**locals()))
 
 
         if event == 'call' and source_line.lstrip().startswith('@'):
@@ -592,7 +571,7 @@ class Tracer:
                     line_no = candidate_line_no
                     source_line = candidate_source_line
                     break
-                
+
         code_byte = frame.f_code.co_code[frame.f_lasti]
         if not isinstance(code_byte, int):
             code_byte = ord(code_byte)
@@ -606,68 +585,15 @@ class Tracer:
             self.write('{_FOREGROUND_RED}{indent}Call ended by exception{_STYLE_RESET_ALL}'.
                        format(**locals()))
         else:
+            # self.write(u'{indent}{_STYLE_DIM}{timestamp} {thread_info}{event:9} '
+            #            u'{line_no:4}{_STYLE_RESET_ALL} {source_line}'.format(**locals()))
             self.write(u'{indent}{_STYLE_DIM}{thread_info}{event:9} '
                        u'{line_no:4}{_STYLE_RESET_ALL} {source_line}'.format(**locals()))
 
         if self.is_in_expanded_status and event == 'call':
+            # self.write(f'{indent}{_STYLE_DIM}{thread_info}... (body omitted)')
             self.write(u'{indent}{_STYLE_DIM}{thread_info}{_STYLE_RESET_ALL}{padding}... (function body omitted)'
            .format(indent=indent, _STYLE_DIM=_STYLE_DIM, thread_info=thread_info, event=event,padding = ' '*4,  _STYLE_RESET_ALL=_STYLE_RESET_ALL))
-
-
-        if not ended_by_exception:
-            return_value_repr = utils.get_shortish_repr(arg,
-                                                        custom_repr=self.custom_repr,
-                                                        max_length=self.max_variable_length,
-                                                        normalize=self.normalize,
-                                                        )
-        ## if enable call graph
-        if self.call_graph_output_path:
-            if event == 'call':
-                if frame not in self.call_frames:
-                    self.call_frames[frame] = []
-                result_str_lst = self.call_frames[frame]
-                
-                self.call_infos.append({'depth': thread_global.depth,
-                                            'content': result_str_lst,
-                    })
-                
-
-                result_str_lst.append(f'Call ... {source_line}')
-                result_str_lst.append(f'Source path:... {source_path}')
-
-                input_para_string = 'Starting var:.. '
-                
-                for name, value_repr in local_reprs.items():
-                    if name not in old_local_reprs:
-                        input_para_string += ('{name} = '
-                                '{value_repr}, '.format(**locals()))
-
-                input_para_string = input_para_string.rstrip().strip(',')
-                if len(input_para_string) > 100:
-                    input_para_string = input_para_string[:94] + ' ......'
-                
-                if input_para_string != 'Starting var:..':
-                    result_str_lst.append(input_para_string)
-                
-                
-            if event == 'return':
-                if frame not in self.call_frames:
-                    raise Exception(f'Frame in file {frame.f_code.co_filename}-{frame.f_lineno} not found in call_frames.')
-                result_str_lst = self.call_frames[frame]
-                if ended_by_exception:
-                    result_str_lst.append('Call ended by exception')
-                else:
-                    result_str_lst.append(f'Return ... {source_line}')
-
-                if not ended_by_exception:
-                    result_str_lst.append(f'Return value:.. {return_value_repr}')                
-
-                import json
-                with open(self.call_graph_output_path, 'w') as f:
-                    json.dump(self.call_infos, f, indent=4)
-
-
-
 
         if event == 'return':
             if not self.observed_file or frame not in self.target_frames:
@@ -676,6 +602,11 @@ class Tracer:
             thread_global.depth -= 1
 
             if not ended_by_exception:
+                return_value_repr = utils.get_shortish_repr(arg,
+                                                            custom_repr=self.custom_repr,
+                                                            max_length=self.max_variable_length,
+                                                            normalize=self.normalize,
+                                                            )
                 self.write('{indent}{_FOREGROUND_CYAN}{_STYLE_DIM}'
                            'Return value:.. {_STYLE_NORMAL}{return_value_repr}'
                            '{_STYLE_RESET_ALL}'.
