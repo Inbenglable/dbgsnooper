@@ -22,6 +22,13 @@ setuptools.setup(
     url='https://github.com/Inbenglable/PySnooper.git',
     packages=setuptools.find_packages(exclude=['tests*']),
     install_requires=[],
+    entry_points={
+        'console_scripts': [
+            'trace_method = dbgsnooper.cli:main',
+            'trace_var = dbgsnooper.cli:main',
+            'call_graph = dbgsnooper.cli:main',
+        ],
+    },
     extras_require={
         'tests': {
             'pytest',

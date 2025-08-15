@@ -18,7 +18,6 @@ from . import utils, pycompat
 if pycompat.PY2:
     from io import open
 
-
 ipython_filename_pattern = re.compile('^<ipython-input-([0-9]+)-.*>$')
 ansible_filename_pattern = re.compile(r'^(.+\.zip)[/|\\](ansible[/|\\]modules[/|\\].+\.py)$')
 ipykernel_filename_pattern = re.compile(r'^/var/folders/.*/ipykernel_[0-9]+/[0-9]+.py$')
@@ -234,20 +233,27 @@ class Tracer:
     def __init__(self, output=None, watch=(), watch_explode=(), depth=1,
                  prefix='', overwrite=False, thread_info=False, custom_repr=(),
                  max_variable_length=100, normalize=False, relative_time=False,
-                 color=True, observed_file = None, start_line = None, end_line = None, loop = None, depth_expanded = True, call_graph_output_path = '/data/swe-fl/SRC/pysnooper_axel/trace_test/test.json'):
-        self.depth_expanded = depth_expanded if not call_graph_output_path else False
+                 color=True, observed_file = None, start_line = None, end_line = None, spec_loop_time = None, depth_expanded = True, call_graph_mode = False):
+        
+        self.is_last_skip = False
+        self.is_last_call_skip = False
+        self.loop = 3
+        self.spec_loop_time = spec_loop_time
+        
+        self.depth_expanded = depth_expanded if not call_graph_mode else False
+        self.depth = depth if not call_graph_mode else 3
         self.is_in_expanded_status = False
         
-        self.call_graph_output_path = call_graph_output_path
-        if call_graph_output_path:
+        self.call_graph_output_path = 'call_graph_data.json' if call_graph_mode else None
+        if call_graph_mode:
+
             self.call_frames = {}
             self.call_infos = []
         
-        
-        self.loop = loop
+        self.frame_line_executed = {}
         self.observed_file = os.path.abspath(observed_file) if observed_file else None
         
-        self.frame_line_executed = {}
+
         self.start_line = start_line
         self.end_line = end_line
         if self.observed_file:
@@ -265,7 +271,6 @@ class Tracer:
         ]
         self.frame_to_local_reprs = {}
         self.start_times = {}
-        self.depth = depth
         self.prefix = prefix
         self.thread_info = thread_info
         self.thread_info_padding = 0
@@ -366,6 +371,12 @@ class Tracer:
         if not self.call_graph_output_path:
             s = u'{self.prefix}{s}\n'.format(**locals())
             self._write(s)
+        else:
+            import json
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            call_graph_output_path = os.path.join(current_dir, self.call_graph_output_path)
+            with open(call_graph_output_path, 'w') as f:
+                json.dump(self.call_infos, f, indent=4)
 
     def __enter__(self):
         if DISABLED:
@@ -423,25 +434,39 @@ class Tracer:
                                        current_thread_len)
         return thread_info.ljust(self.thread_info_padding)
 
-    def trace(self, frame, event, arg):
+    def trace(self, frame, event, arg): 
         if self.observed_file:
             if len(self.target_frames) == 0:
                 frame_file_name = frame.f_code.co_filename
                 if frame_file_name == self.observed_file:
-                    if self.start_line <= frame.f_lineno <= self.end_line:
+                    with open(frame_file_name, 'r') as f:
+                        source = f.read().splitlines()
+                    line_no = frame.f_lineno
+                    source_line = source[line_no - 1]
+                    if event == 'call' and source_line.lstrip().startswith('@'):
+                        for candidate_line_no in itertools.count(line_no):
+                            try:
+                                candidate_source_line = source[candidate_line_no - 1]
+                            except IndexError:
+                                break
+                            if candidate_source_line.lstrip().startswith('def'):
+                                # Found the def line!
+                                line_no = candidate_line_no
+                                break                    
+                    if self.start_line <= line_no <= self.end_line:
                         self.target_frames.add(frame)
                         self.start_times[frame] = datetime_module.datetime.now()
                         thread_global.depth = 0
                     else:
                         return self.trace
                 else:
-                    return None
-            elif frame not in self.target_frames and self.is_in_code_scope(frame):
+                    return self.trace
+            elif frame not in self.target_frames and self.is_in_code_scope(frame, event):
                 if frame not in self.start_times:
                     self.start_times[frame] = datetime_module.datetime.now() 
                 self.target_frames.add(frame)
 
-            if frame in self.target_frames and not self.is_in_code_scope(frame):
+            elif frame in self.target_frames and not self.is_in_code_scope(frame, event):
                 if event == 'return' or event == 'exception':
                     thread_global.depth -= 1
                     self.target_frames.discard(frame)
@@ -457,10 +482,15 @@ class Tracer:
             for i in range(1, back_depth):
                 _frame_candidate = _frame_candidate.f_back
                 if _frame_candidate is None:
-                    return None
-                elif _frame_candidate.f_code in self.target_codes or (_frame_candidate in self.target_frames and self.is_in_code_scope(_frame_candidate)):
+                    return self.trace
+                elif _frame_candidate.f_code in self.target_codes or (_frame_candidate in self.target_frames and self.is_in_code_scope(_frame_candidate, event)):
                     if self.loop:
-                        if self.has_executed_than_loop_times(_frame_candidate, loop_times = self.loop+1):
+                        if self.is_skip_loop(_frame_candidate, max_loop_times = self.loop + 1):
+                            if self.call_graph_output_path and event == 'call' and not self.is_last_call_skip:
+                                self.call_infos.append({'depth': thread_global.depth + 1,
+                                                        'content': ['......Skipping repeated (loop) calling details......'],
+                                                        })
+                                self.is_last_call_skip = True
                             return None
                     if self.depth_expanded:
                         if i == back_depth - 1:
@@ -473,21 +503,7 @@ class Tracer:
             else:
                 return self.trace
 
-
-        if self.loop:
-            if event != 'return' and event != 'exception':
-                if self.has_executed_than_loop_times(frame):
-                    self.record_frame_line_executed(frame)
-                    return self.trace
-                else:
-                    self.record_frame_line_executed(frame)
-        #                                                                     #
-        ### Finished checking whether we should trace this line. ##############
-        if event == 'call':
-            thread_global.depth += 1
-
         indent = ' ' * 4 * thread_global.depth
-
         _FOREGROUND_BLUE = self._FOREGROUND_BLUE
         _FOREGROUND_CYAN = self._FOREGROUND_CYAN
         _FOREGROUND_GREEN = self._FOREGROUND_GREEN
@@ -499,6 +515,25 @@ class Tracer:
         _STYLE_DIM = self._STYLE_DIM
         _STYLE_NORMAL = self._STYLE_NORMAL
         _STYLE_RESET_ALL = self._STYLE_RESET_ALL
+
+        if self.loop:
+            if event != 'return' and event != 'exception':
+                if self.is_skip_loop(frame):
+                    self.record_frame_line_executed(frame)
+                    if not self.is_last_skip:
+                        self.write(u'{indent}{_FOREGROUND_BLUE}{_STYLE_DIM}......Skipping repeated execution details......{_STYLE_RESET_ALL}'.format(**locals()))
+                        self.is_last_skip = True
+                    return self.trace
+                else:
+                    self.is_last_skip = False
+                    self.record_frame_line_executed(frame)        
+        #                                                                     #
+        ### Finished checking whether we should trace this line. ##############
+        if event == 'call':
+            thread_global.depth += 1
+
+        indent = ' ' * 4 * thread_global.depth
+
 
         ### Making timestamp: #################################################
         #                                                                     #
@@ -552,13 +587,12 @@ class Tracer:
         newish_string = ('Starting var:.. ' if event == 'call' else
                                                             'New var:....... ')
         
-        if not self.is_in_expanded_status or event == 'call':
-            
+        if not self.is_in_expanded_status or event == 'call': 
             input_para_string = ''
             modify_var_string = ''
             for name, value_repr in local_reprs.items():
                 if name not in old_local_reprs:
-                    input_para_string += f'{name} = {value_repr},\t'
+                    input_para_string += f'{name} = {value_repr},    '
                     
 
                 elif old_local_reprs[name] != value_repr:
@@ -566,14 +600,14 @@ class Tracer:
             
             if input_para_string:
                 input_para_string = input_para_string.rstrip().strip(',')
-                if len(input_para_string) > 100:
+                if len(input_para_string) > 200:
                     input_para_string = input_para_string[:94] + ' ......'
                 self.write('{indent}{_FOREGROUND_GREEN}{_STYLE_DIM}'
                         '{newish_string}{_STYLE_NORMAL}{input_para_string}{_STYLE_RESET_ALL}'.format(**locals()))
                 
             if modify_var_string:
                 modify_var_string = modify_var_string.rstrip().strip(',')
-                if len(modify_var_string) > 100:
+                if len(modify_var_string) > 200:
                     modify_var_string = modify_var_string[:94] + ' ......'
                 self.write('{indent}{_FOREGROUND_GREEN}{_STYLE_DIM}'
                         'Modified var:.. {_STYLE_NORMAL}{modify_var_string}{_STYLE_RESET_ALL}'.format(**locals()))
@@ -631,6 +665,8 @@ class Tracer:
                                             'content': result_str_lst,
                     })
                 
+                self.is_last_call_skip = False
+                
 
                 result_str_lst.append(f'Call ... {source_line}')
                 result_str_lst.append(f'Source path:... {source_path}')
@@ -652,7 +688,9 @@ class Tracer:
                 
             if event == 'return':
                 if frame not in self.call_frames:
-                    raise Exception(f'Frame in file {frame.f_code.co_filename}-{frame.f_lineno} not found in call_frames.')
+                    # raise Exception(f'Frame in file {frame.f_code.co_filename}-{frame.f_lineno} not found in call_frames.')
+                    print(f'Frame in file {frame.f_code.co_filename}-{frame.f_lineno} not found in call_frames.')
+                    return self.trace
                 result_str_lst = self.call_frames[frame]
                 if ended_by_exception:
                     result_str_lst.append('Call ended by exception')
@@ -661,12 +699,6 @@ class Tracer:
 
                 if not ended_by_exception:
                     result_str_lst.append(f'Return value:.. {return_value_repr}')                
-
-                import json
-                with open(self.call_graph_output_path, 'w') as f:
-                    json.dump(self.call_infos, f, indent=4)
-
-
 
 
         if event == 'return':
@@ -720,30 +752,54 @@ class Tracer:
         #     '{_STYLE_RESET_ALL}'.format(**locals())
         # )
     
-    def is_in_code_scope(self, frame):
+    def is_in_code_scope(self, frame, event):
         frame_file_name = frame.f_code.co_filename
+        if not os.path.exists(frame_file_name):
+            return False
+        with open(frame_file_name, 'r') as f:
+            source = f.read().splitlines()
+        line_no = frame.f_lineno
+        source_line = source[line_no - 1]
+        if event == 'call' and source_line.lstrip().startswith('@'):
+            for candidate_line_no in itertools.count(line_no):
+                try:
+                    candidate_source_line = source[candidate_line_no - 1]
+                except IndexError:
+                    break
+                if candidate_source_line.lstrip().startswith('def'):
+                    # Found the def line!
+                    line_no = candidate_line_no
+                    break                    
         if self.observed_file:
             if frame_file_name == self.observed_file:
-                if self.start_line <= frame.f_lineno <= self.end_line:
+                if self.start_line <= line_no <= self.end_line:
                     return True
-            else:
-                frame_file_name = os.path.abspath(frame_file_name)
-                if frame_file_name == self.observed_file:
-                    if self.start_line <= frame.f_lineno <= self.end_line:
-                        return True
         return False
 
-    def has_executed_than_loop_times(self, frame, loop_times = None):
-        has_loop_times = 0
+
+            # if curr_fline_event_cnt[key] == total_fline_event_cnt[key] or curr_fline_event_cnt[key] <= self.loop:
+            #     self._write(str(fline_msg))
+            #     is_last_skip = False
+            # else:
+            #     if not is_last_skip:
+            #         self._write(f'\n\t...Skipping repeated(loop) execution details...\n\n')
+            #         is_last_skip = True
+                
+    def is_skip_loop(self, frame, max_loop_times = None):
+        looped_times = 0
+        max_loop_times = max_loop_times if max_loop_times is not None else self.loop
+        
         if frame in self.frame_line_executed and frame.f_lineno in self.frame_line_executed[frame]:
-            has_loop_times = self.frame_line_executed[frame][frame.f_lineno]
-        if not loop_times:
-            loop_times = self.loop
-        if frame in self.frame_line_executed:
-            if frame.f_lineno in self.frame_line_executed[frame] and has_loop_times >= loop_times:
-                return True
+            looped_times = self.frame_line_executed[frame][frame.f_lineno]
+        else:
+            return False
+        if looped_times >= max_loop_times:
+            if self.spec_loop_time:
+                if looped_times == self.spec_loop_time - 1:
+                    return False
+            return True
         return False
-    
+
     def record_frame_line_executed(self, frame):
         if frame not in self.frame_line_executed:
             self.frame_line_executed[frame] = {}
